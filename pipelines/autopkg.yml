@@ -1,0 +1,135 @@
+---
+resource_types:
+- name: slack-notification
+  type: registry-image
+  source:
+    repository: cfcommunity/slack-notification-resource
+    tag: latest
+
+resources:
+- name: autopkg-repo
+  type: git
+  icon: github
+  source:
+    uri: git@github.com:forvitinn/mdo_concourse.git
+    private_key: ((private_key))
+- name: munki-repo
+  type: git
+  icon: github
+  source:
+    uri: git@github.com:forvitinn/mdo_concourse.git
+    private_key: ((private_key))
+- name: munki-code
+  type: git
+  icon: github
+  source:
+    uri: https://github.com/munki/munki.git
+    branch: main
+- name: python-base
+  type: registry-image
+  icon: docker
+  source:
+    repository: python
+    tag: 3.10.3
+- name: notify
+  type: slack-notification
+  icon: slack
+  source:
+    url: ((slack))
+- name: schedule
+  type: time
+  icon: alarm
+  source:
+    interval: 2h
+
+jobs:
+- name: autopkg
+  plan:
+  - in_parallel:
+    - get: autopkg-repo
+    - get: munki-repo
+      params:
+        disable_git_lfs: true
+    - get: munki-code
+    - get: python-base
+    - get: schedule
+      trigger: true
+  - task: autopkg-run
+    image: python-base
+    config:
+      platform: darwin
+      params:
+        FIRST_RUN: false
+        GITHUB_TOKEN: ((github_token))
+        SLACK_WEBHOOK: ((slack))
+      inputs:
+      - name: autopkg-repo
+      - name: munki-repo
+      - name: munki-code
+      outputs:
+      - name: munki-repo
+      - name: notify_message
+      run:
+        path: /bin/bash
+        args:
+        - -exc
+        - |
+          if $FIRST_RUN; then
+            # # # # install python dependencies
+            python3 -m pip install --upgrade pip
+            python3 -m pip install -r autopkg-repo/autopkg/reqs.txt
+            
+            # # # # # install autopkg
+            auto_pkg_dir=$(mktemp -d -t 'auto_pkg_dir')
+            curl -L https://github.com/autopkg/autopkg/releases/download/v2.3.1/autopkg-2.3.1.pkg --output $auto_pkg_dir/autopkg.pkg
+            bash autopkg-repo/autopkg/check_hash.sh $auto_pkg_dir/autopkg.pkg efe5d1ac1c05d264d6502b72122fc3ae5f101f9df776b81385fcea14e45cd585
+            if [ $? -eq 0 ]; then
+              installer -pkg $auto_pkg_dir/autopkg.pkg -target /
+            else
+              exit 1
+            fi
+
+            # # # # # install munki tools
+            munki_pkg_dir=$(mktemp -d -t 'munki_pkg_dir')
+            curl -L https://github.com/munki/munki/releases/download/v5.7.1/munkitools-5.7.1.4434.pkg --output $munki_pkg_dir/munkitools.pkg
+            bash autopkg-repo/autopkg/check_hash.sh $munki_pkg_dir/munkitools.pkg 3b00461db482934bdc6849dc9f8db03e5359dc32f99fe88cacd3f234d4f88ba1
+            if [ $? -eq 0 ]; then
+              installer -pkg $munki_pkg_dir/munkitools.pkg -target /
+            else
+              exit 3
+            fi
+          fi
+          
+          # # # configure autopkg and git
+          /usr/bin/defaults write com.github.autopkg RECIPE_OVERRIDE_DIRS autopkg-repo/autopkg/overrides/
+          /usr/bin/defaults write com.github.autopkg RECIPE_REPO_DIR autopkg-repo/autopkg/
+          /usr/bin/defaults write com.github.autopkg FAIL_RECIPES_WITHOUT_TRUST_INFO -bool YES
+          /usr/bin/defaults write com.github.autopkg MUNKI_REPO munki-repo/munki_repo
+          /usr/bin/defaults write com.github.autopkg RECIPE_SEARCH_DIRS autopkg-repo/autopkg/
+          
+          git config --global user.name "concourse_runner"
+          git config --global user.email "concourse_runner@concourse.local"
+
+          # # # add autopkg repos
+          for repo in $(cat autopkg-repo/autopkg/repo_list.txt); do autopkg repo-add "$repo" && autopkg repo-update "$repo"; done
+
+          # run makecatalogs
+          /usr/local/munki/makecatalogs munki-repo/munki_repo
+
+          # # # run it
+          python3 autopkg-repo/autopkg/autopkg_tools_concourse.py -s $SLACK_WEBHOOK \
+          -a autopkg-repo/autopkg -d DEBUG -m munki-repo/munki_repo \
+          -p -t $GITHUB_TOKEN -l autopkg-repo/autopkg/recipe_list.json
+
+    on_success:
+      put: notify
+      params:
+        text: "Success running autopkg: Build URL: http://localhost:8080/builds/$BUILD_ID"
+    on_failure:
+      put: notify
+      params:
+        text: "Failure running autopkg: Build URL: http://localhost:8080/builds/$BUILD_ID"
+
+
+
+

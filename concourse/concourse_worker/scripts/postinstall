@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+console_user=$(/usr/bin/stat -f "%Su" /dev/console)
+console_user_uid=$(/usr/bin/id -u "$console_user")
+
+# this could run as root but autopkg will warn about this
+mv /Library/LaunchAgents/com.mdo.concourse.worker.plist /Users/"$console_user"/Library/LaunchAgents/com.mdo.concourse.worker.plist
+
+chown -R "$console_user" /Users/"$console_user"/Library/LaunchAgents/com.mdo.concourse.worker.plist
+
+launchctl asuser "${console_user_uid}" /bin/launchctl unload -w /Users/"$console_user"/Library/LaunchAgents/com.mdo.concourse.worker.plist
+launchctl asuser "${console_user_uid}" /bin/launchctl load -w /Users/"$console_user"/Library/LaunchAgents/com.mdo.concourse.worker.plist
+
+# set the permissions on the work directory to create temp volumes
+chown -R "$console_user" /usr/local/concourse/
+
+exit 0

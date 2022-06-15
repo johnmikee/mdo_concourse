@@ -1,0 +1,11 @@
+{
+    "ownership": "recommended",
+    "suppress_bundle_relocation": true,
+    "postinstall_action": "none",
+    "preserve_xattr": false,
+    "name": "concourse_worker-${version}.pkg",
+    "identifier": "com.mdo.concourse_worker",
+    "install_location": "/",
+    "version": "0.0.1",
+    "distribution_style": false
+}

@@ -1,0 +1,70 @@
+version: '3'
+
+services:
+  concourse-db:
+    image: postgres
+    environment:
+      POSTGRES_DB: concourse
+      POSTGRES_PASSWORD: concourse_pass
+      POSTGRES_USER: concourse_user
+      PGDATA: /database
+
+  web:
+    image: &concourse-image rdclda/concourse:7.7.1
+    command: web
+    privileged: true
+    depends_on: 
+      - concourse-db
+    ports: 
+      - "8080:8080"
+      - "2222:2222"
+    environment:
+      CONCOURSE_POSTGRES_HOST: concourse-db
+      CONCOURSE_POSTGRES_USER: concourse_user
+      CONCOURSE_POSTGRES_PASSWORD: concourse_pass
+      CONCOURSE_POSTGRES_DATABASE: concourse
+      # replace this with your external IP address
+      CONCOURSE_EXTERNAL_URL: http://localhost:8080
+      CONCOURSE_ADD_LOCAL_USER: test:test
+      CONCOURSE_MAIN_TEAM_LOCAL_USER: test
+      # instead of relying on the default "detect"
+      CONCOURSE_WORKER_BAGGAGECLAIM_DRIVER: overlay
+      CONCOURSE_CLUSTER_NAME: mdoyvr
+      CONCOURSE_ENABLE_PIPELINE_INSTANCES: "true"
+      CONCOURSE_ENABLE_ACROSS_STEP: "true"
+      CONCOURSE_SESSION_SIGNING_KEY: /usr/local/concourse/keys/session_signing_key
+      CONCOURSE_TSA_HOST_KEY: /usr/local/concourse/keys/tsa_host_key
+      CONCOURSE_TSA_AUTHORIZED_KEYS: /usr/local/concourse/keys/authorized_worker_keys
+      CONCOURSE_X_FRAME_OPTIONS: allow
+      CONCOURSE_CONTENT_SECURITY_POLICY: "*"
+      CONCOURSE_WORKER_CONTAINERD_DNS_SERVER: "8.8.8.8"
+      CONCOURSE_WORKER_RUNTIME: "containerd"
+    volumes:
+      - ./concourse_keys:/usr/local/concourse/keys
+
+  worker:
+    image: *concourse-image
+    command: worker
+    privileged: true
+    depends_on: [web]
+    ports:
+    - 7777:7777
+    - 7788:7788
+    environment:
+      CONCOURSE_RUNTIME: "containerd"
+      CONCOURSE_NAME: worker-1
+      CONCOURSE_TSA_PUBLIC_KEY: /usr/local/concourse/keys/tsa_host_key.pub
+      CONCOURSE_TSA_WORKER_PRIVATE_KEY: /usr/local/concourse/keys/worker_key
+      CONCOURSE_LOG_LEVEL: error
+      CONCOURSE_TSA_HOST: web:2222
+      CONCOURSE_BIND_IP: 0.0.0.0
+      CONCOURSE_BAGGAGECLAIM_BIND_IP: 0.0.0.0
+      # avoid using loopbacks
+      CONCOURSE_BAGGAGECLAIM_DRIVER: overlay
+      # work with docker-compose's dns
+      CONCOURSE_CONTAINERD_DNS_PROXY_ENABLE: "true"
+    volumes:
+    - ./concourse_keys:/usr/local/concourse/keys
+
+volumes:
+  concourse_keys:
